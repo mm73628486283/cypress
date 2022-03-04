@@ -50,18 +50,39 @@ function buildSpecs (projectRoot: string, files: Cypress.Cypress['spec'][] = [])
 }
 
 // Runs the tests inside the iframe
-export default function loader (this: CypressCTWebpackContext & LoaderContext<void>) {
+export default async function loader (this: CypressCTWebpackContext & LoaderContext<void>) {
   // In Webpack 5, a spec added after the dev-server is created won't
   // be included in the compilation. Disabling the caching of this loader ensures
   // we regenerate our specs and include any new ones in the compilation.
   this.cacheable(false)
+  const callback = this.async()
   const { files, projectRoot, supportFile } = this._cypress
+
+  const fileExists = async (file: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      this.fs.stat(file, (error) => {
+        if (error) {
+          resolve(false)
+        }
+
+        resolve(true)
+      })
+    })
+  }
+
+  // This is the long form of a filter when the predicate is asynchronous
+  // We filter on the files that actually exist to avoid race conditions
+  const specFiles = (await Promise.all(files.map(async (file) => {
+    const exists = await fileExists(file.absolute)
+
+    return exists ? file : null
+  }))).filter((file) => file) as Cypress.Cypress['spec'][]
 
   const supportFileAbsolutePath = supportFile ? JSON.stringify(path.resolve(projectRoot, supportFile)) : undefined
 
-  return `
+  callback(null, `
   var loadSupportFile = ${supportFile ? `() => import(${supportFileAbsolutePath})` : `() => Promise.resolve()`}
-  var allTheSpecs = ${buildSpecs(projectRoot, files)};
+  var allTheSpecs = ${buildSpecs(projectRoot, specFiles)};
 
   var { init } = require(${JSON.stringify(require.resolve('./aut-runner'))})
 
@@ -74,5 +95,7 @@ export default function loader (this: CypressCTWebpackContext & LoaderContext<vo
   }, [loadSupportFile])
 
   init(scriptLoaders)
-  `
+  `)
+
+  return
 }
